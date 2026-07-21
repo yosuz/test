@@ -243,7 +243,7 @@
   </div>
 
   <script>
-    // 🌐 새로 발급받으신 최신 구글 스프레드시트 웹 앱 API 주소 적용 완료!
+    // 🌐 최신 구글 스프레드시트 웹 앱 API 주소
     const GOOGLE_APP_URL = "https://script.google.com/macros/s/AKfycbziWXAW-w3SYT2aUCofgI0dJ1mq7Sd8S51heAeC-4nwA47SQOStZXEKdB2Ldeg9eIhR/exec";
 
     let players = [];
@@ -263,13 +263,18 @@
         const rawText = await response.text(); 
         
         if (rawText.trim().startsWith("<")) {
-          alert("🚨 구글 서버 에러 발견!\n\n구글 서버가 데이터 대신 HTML 웹페이지를 보냈습니다.\n이유: '배포 시 액세스 권한이 [모든 사용자]가 아니거나', '스크립트 수정 후 [새 버전]으로 배포하지 않았기 때문'입니다.\n\n[서버가 보낸 내용 일부]:\n" + rawText.substring(0, 100));
+          alert("🚨 구글 서버 에러 발견!\n\n구글 서버가 데이터 대신 HTML 웹페이지를 보냈습니다.\n[서버가 보낸 내용 일부]:\n" + rawText.substring(0, 100));
           return;
         }
 
         const data = JSON.parse(rawText);
         if (Array.isArray(data) && data.length > 0) {
-          players = data;
+          // DB에 x, y가 없으므로 로드할 때 겹치지 않게 화면에 기본 분산 좌표 부여
+          players = data.map((p, idx) => ({
+            ...p,
+            x: p.x || (30 + ((idx * 15) % 40)), 
+            y: p.y || (30 + (Math.floor(idx / 3) * 15) % 40)
+          }));
         } else {
           players = [
             { id: '1', num: 7, name: '손흥민', isAttended: false, order: null, onField: false, x: 50, y: 50 },
@@ -290,15 +295,17 @@
       }
     }
 
-    // 💡 클라우드 저장하기 엔진
+    // 💡 클라우드 저장하기 엔진 (x, y 좌표 제외하고 필수 정보만 전송)
     async function saveDataToCloud() {
       showLoading(true);
       try {
+        const cleanData = players.map(({ x, y, ...rest }) => rest);
+
         await fetch(GOOGLE_APP_URL, {
           method: "POST",
           redirect: "follow",
           headers: { "Content-Type": "text/plain;charset=utf-8" },
-          body: JSON.stringify(players)
+          body: JSON.stringify(cleanData)
         });
         render();
       } catch (error) {
@@ -363,6 +370,7 @@
       attended.forEach((p, idx) => { p.order = idx + 1; });
     }
 
+    // 🔥 핵심 1: 경기 종료 시에만 순번 로테이션 계산 후 DB에 단 1번 일괄 저장!
     function endGameAndRotate() {
       const attended = players.filter(p => p.isAttended);
       if(attended.length === 0) { alert('출석한 선수가 없습니다.'); return; }
@@ -372,8 +380,15 @@
 
       const benchPlayers = attended.filter(p => !p.onField).sort((a, b) => a.order - b.order);
       const playedPlayers = onFieldPlayers.sort((a, b) => a.order - b.order);
+      
+      // 다음 경기를 위해 순서 재정렬 및 전원 벤치 복귀 처리
       const rotatedList = [...benchPlayers, ...playedPlayers];
-      rotatedList.forEach((p, idx) => { p.order = idx + 1; p.onField = false; });
+      rotatedList.forEach((p, idx) => { 
+        p.order = idx + 1; 
+        p.onField = false; 
+      });
+      
+      // 재정렬된 완벽한 상태를 구글 시트에 딱 한 번 저장
       saveDataToCloud();
     }
 
@@ -384,9 +399,10 @@
       }
     }
 
+    // 🔥 핵심 2: 경기장 비우기도 DB 저장 없이 화면(로컬)에서 0초 만에 즉시 실행
     function resetPositions() { 
       players.forEach(p => { p.onField = false; }); 
-      saveDataToCloud(); 
+      render(); 
     }
 
     function allowDrop(e) { e.preventDefault(); }
@@ -458,6 +474,7 @@
       return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
     }
 
+    // 🔥 핵심 3: 경기장 투입 및 위치 이동 시 DB 저장 로직 완전 삭제! (0초 로딩)
     function movePlayerToPitch(id, clientX, clientY) {
       const player = players.find(p => p.id === id);
       if (!player) return;
@@ -469,14 +486,19 @@
       x = Math.max(8, Math.min(92, x));
       y = Math.max(8, Math.min(92, y));
 
-      player.onField = true; player.x = x; player.y = y;
-      saveDataToCloud();
+      player.onField = true; 
+      player.x = x; 
+      player.y = y;
+
+      render(); // 서버와 통신하지 않고 화면만 즉시 그립니다.
     }
 
+    // 🔥 핵심 4: 경기장에서 벤치로 복귀할 때도 DB 저장 없이 화면만 0초 만에 변경!
     function movePlayerToBench(id) {
       const player = players.find(p => p.id === id);
       if (player && player.onField) {
-        player.onField = false; saveDataToCloud();
+        player.onField = false; 
+        render(); // 서버 통신 없음
       }
     }
 
